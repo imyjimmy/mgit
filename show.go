@@ -43,55 +43,118 @@ func HandleShow(args []string) {
 
 // resolveRevision resolves a revision (branch, tag, commit hash) to a commit hash
 func resolveRevision(repo *git.Repository, rev string) (plumbing.Hash, error) {
-	// First, try to resolve as a reference (branch, tag)
-	ref, err := repo.Reference(plumbing.ReferenceName(rev), true)
-	if err == nil {
-		return ref.Hash(), nil
+	// If it's HEAD, resolve it
+	if rev == "HEAD" {
+			ref, err := repo.Head()
+			if err == nil {
+					return ref.Hash(), nil
+			}
 	}
 
-	// If that fails, try as a short or full hash
-	if plumbing.IsHash(rev) {
-		return plumbing.NewHash(rev), nil
+	// Try to resolve as a reference (branch, tag)
+	ref, err := repo.Reference(plumbing.ReferenceName(rev), true)
+	if err == nil {
+			return ref.Hash(), nil
 	}
 
 	// Try with refs/heads/ prefix
 	ref, err = repo.Reference(plumbing.ReferenceName("refs/heads/"+rev), true)
 	if err == nil {
-		return ref.Hash(), nil
+			return ref.Hash(), nil
 	}
 
 	// Try with refs/tags/ prefix
 	ref, err = repo.Reference(plumbing.ReferenceName("refs/tags/"+rev), true)
 	if err == nil {
-		return ref.Hash(), nil
+			return ref.Hash(), nil
 	}
 
-	// If it's HEAD, resolve it
-	if rev == "HEAD" {
-		ref, err := repo.Head()
-		if err == nil {
-			return ref.Hash(), nil
-		}
+	// If it's a full 40-char hash
+	if len(rev) == 40 && plumbing.IsHash(rev) {
+			hash := plumbing.NewHash(rev)
+			_, err := repo.CommitObject(hash)
+			if err == nil {
+					return hash, nil
+			}
 	}
+
+	// If it's a partial hash, try to find a matching commit
+	if len(rev) >= 4 && len(rev) < 40 {
+			// List all commits and find a match
+			iter, err := repo.CommitObjects()
+			if err != nil {
+					return plumbing.ZeroHash, fmt.Errorf("error listing commits: %s", err)
+			}
+			defer iter.Close()
+
+			var matchingHash plumbing.Hash
+			matchCount := 0
+
+			err = iter.ForEach(func(c *object.Commit) error {
+					if strings.HasPrefix(c.Hash.String(), rev) {
+							matchingHash = c.Hash
+							matchCount++
+					}
+					return nil
+			})
+
+			if err != nil {
+					return plumbing.ZeroHash, fmt.Errorf("error searching commits: %s", err)
+			}
+
+			if matchCount == 1 {
+					return matchingHash, nil
+			} else if matchCount > 1 {
+					return plumbing.ZeroHash, fmt.Errorf("ambiguous commit hash prefix: %s", rev)
+			}
+	}
+
+	// Check nostr mappings for MGit hashes
+	if pubkey := GetNostrPubKey(); pubkey != "" {
+			// Read all mappings and search for matches
+			mappings := getAllNostrMappings()
+			fmt.Printf("Checking %d nostr mappings for hash '%s'\n", len(mappings), rev)
+
+			for _, mapping := range mappings {
+					fmt.Printf("Comparing with: Git=%s, MGit=%s\n", mapping.GitHash, mapping.MGitHash)
+					// Check for exact MGitHash match
+					if mapping.MGitHash == rev || strings.HasPrefix(mapping.MGitHash, rev) {
+							return plumbing.NewHash(mapping.GitHash), nil
+					}
+			}
+	} else { fmt.Printf("no nostr pubkey!") }
 
 	return plumbing.ZeroHash, fmt.Errorf("revision not found")
 }
 
 // displayCommit shows formatted commit information
 func displayCommit(commit *object.Commit) {
-	fmt.Printf("commit %s\n", commit.Hash.String())
-	fmt.Printf("Author: %s <%s>\n", commit.Author.Name, commit.Author.Email)
-	fmt.Printf("Date:   %s\n\n", commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
-
-	// Check if we can get nostr pubkey for this commit
-	pubkey := GetCommitNostrPubkey(commit.Hash)
-	if pubkey != "" {
-		fmt.Printf("Nostr:  %s\n\n", pubkey)
+	// Get the MGit hash for this commit
+	mgitHash := GetMGitHashForCommit(commit.Hash)
+	
+	// If we have an MGit hash, display that
+	if mgitHash != "" {
+			fmt.Printf("commit %s\n", mgitHash)
+	} else {
+			// Otherwise fall back to the Git hash
+			fmt.Printf("commit %s\n", commit.Hash.String())
 	}
+	
+	// Get the nostr pubkey for this commit
+	pubkey := GetCommitNostrPubkey(commit.Hash)
+	
+	// Display author with pubkey in the format requested
+	if pubkey != "" {
+			fmt.Printf("Author: %s <%s> <%s>\n", commit.Author.Name, commit.Author.Email, pubkey)
+	} else {
+			fmt.Printf("Author: %s <%s>\n", commit.Author.Name, commit.Author.Email)
+	}
+	
+	fmt.Printf("Date:   %s\n\n", commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
 
 	// Print the commit message with indentation
 	for _, line := range strings.Split(commit.Message, "\n") {
-		fmt.Printf("    %s\n", line)
+			fmt.Printf("    %s\n", line)
 	}
 	fmt.Println()
 }

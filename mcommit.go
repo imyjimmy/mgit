@@ -80,9 +80,16 @@ func MGitCommit(message string, opts *MCommitOptions) (plumbing.Hash, error) {
 	// Now compute a custom hash that incorporates the nostr pubkey
 	mHash := computeMGitHash(commit, opts.Author.Pubkey)
 	
-	// For debugging:
-	// fmt.Printf("Original hash: %s\nMGit hash: %s\n", hash.String(), mHash.String())
+	// Store the mapping between the git hash, mgit hash, and nostr pubkey
+	err = StoreCommitNostrMapping(hash, mHash, opts.Author.Pubkey)
+	if err != nil {
+		fmt.Printf("Warning: Failed to store nostr mapping: %s\n", err)
+		// Continue even if mapping storage fails
+	}
 	
+	fmt.Printf("Created commit mapping: Git hash %s → MGit hash %s (Nostr pubkey: %s)\n", 
+    hash.String(), mHash.String(), opts.Author.Pubkey)
+
 	return mHash, nil
 }
 
@@ -134,9 +141,16 @@ func StoreMGitCommitMapping(gitHash, mgitHash plumbing.Hash) error {
 	return nil
 }
 
-// GetMGitHash retrieves the mgit hash for a given git hash
-// This is a placeholder - in a real implementation, you would query persistent storage
-func GetMGitHash(gitHash plumbing.Hash) (plumbing.Hash, error) {
-	// Implementation would retrieve the mapping from a database or file
-	return plumbing.ZeroHash, fmt.Errorf("mapping not found")
+// getMGitHashForCommit retrieves the MGit hash for a Git commit hash
+func GetMGitHashForCommit(gitHash plumbing.Hash) string {
+	mappings := getAllNostrMappings()
+	gitHashStr := gitHash.String()
+	
+	for _, mapping := range mappings {
+			if mapping.GitHash == gitHashStr {
+					return mapping.MGitHash
+			}
+	}
+	
+	return ""
 }

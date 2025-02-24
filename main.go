@@ -41,6 +41,8 @@ func main() {
 		checkoutBranch(args)
 	case "log":
 		showLog(args)
+	case "show":
+		HandleShow(args)
 	case "config":
 		HandleConfig(args)
 	default:
@@ -65,6 +67,7 @@ func printUsage() {
 	fmt.Println("  branch <name>   Create a new branch")
 	fmt.Println("  checkout <ref>  Checkout a branch or commit")
 	fmt.Println("  log             Show commit history")
+	fmt.Println("  show [commit]    Show commit details and changes")
 	fmt.Println("  config          Get and set configuration values")
 }
 
