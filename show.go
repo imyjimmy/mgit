@@ -84,7 +84,6 @@ func displayCommit(commit *object.Commit) {
 	fmt.Printf("Date:   %s\n\n", commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
 
 	// Check if we can get nostr pubkey for this commit
-	// This is a placeholder - you would need to implement GetCommitNostrPubkey
 	pubkey := GetCommitNostrPubkey(commit.Hash)
 	if pubkey != "" {
 		fmt.Printf("Nostr:  %s\n\n", pubkey)
@@ -128,16 +127,12 @@ func showCommitDiff(repo *git.Repository, commit *object.Commit) {
 		}
 
 		for _, change := range changes {
-			displayFileDiff(repo, change)
+			displayFileDiff(change)
 		}
 	} else {
 		// No parent, show the initial commit files
-		files, err := tree.Files()
-		if err != nil {
-			fmt.Printf("Error getting files: %s\n", err)
-			return
-		}
-
+		files := tree.Files()
+		
 		err = files.ForEach(func(f *object.File) error {
 			fmt.Printf("diff --git a/%s b/%s\n", f.Name, f.Name)
 			fmt.Printf("new file mode %o\n", f.Mode)
@@ -165,9 +160,13 @@ func showCommitDiff(repo *git.Repository, commit *object.Commit) {
 }
 
 // displayFileDiff shows the diff for a single file change
-func displayFileDiff(repo *git.Repository, change *object.Change) {
-	// Display the file names in the diff header
-	from, to := change.Files()
+func displayFileDiff(change *object.Change) {
+	from, to, err := change.Files()
+	if err != nil {
+		fmt.Printf("Error getting file info: %s\n", err)
+		return
+	}
+	
 	if from == nil && to == nil {
 		return
 	}
