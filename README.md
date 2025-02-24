@@ -45,6 +45,12 @@ Some configuration options can be set via environment variables:
 - `MGIT_USERNAME` - Username for authentication with remote repositories
 - `MGIT_PASSWORD` - Password/token for authentication with remote repositories
 
+Users can configure their Nostr public key:
+```
+$ mgit config --global user.name "Jimmy Zhang"
+$ mgit config --global user.pubkey "npub19jlhl9twyjajarvrjeeh75a5ylzngv4tj8y9wgffsgu
+```
+
 ## Example Usage
 
 ```
