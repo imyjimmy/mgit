@@ -231,23 +231,33 @@ func cloneGitData(url, destination, token string) error {
 	// For now, we'll use the git command with a custom header to clone the repository
 	// In a real implementation, we would use go-git or a similar library
 	
-	// Create a temporary config file to include the authorization header
-	tempConfigPath := filepath.Join(os.TempDir(), fmt.Sprintf("mgit-clone-%d.tmp", os.Getpid()))
-	defer os.Remove(tempConfigPath)
+// 	// Create a temporary config file to include the authorization header
+// 	tempConfigPath := filepath.Join(os.TempDir(), fmt.Sprintf("mgit-clone-%d.tmp", os.Getpid()))
+// 	defer os.Remove(tempConfigPath)
 	
-	configContent := fmt.Sprintf(`[http]
-	extraHeader = Authorization: Bearer %s
-`, token)
+// 	configContent := fmt.Sprintf(`[http]
+// 	extraHeader = Authorization: Bearer %s
+// `, token)
 	
-	if err := os.WriteFile(tempConfigPath, []byte(configContent), 0600); err != nil {
-		return fmt.Errorf("error creating temporary config file: %w", err)
-	}
+// 	if err := os.WriteFile(tempConfigPath, []byte(configContent), 0600); err != nil {
+// 		return fmt.Errorf("error creating temporary config file: %w", err)
+// 	}
 	
 	// Construct the Git URL for the upload-pack endpoint
-	gitURL := fmt.Sprintf("%s/api/mgit/repos/%s/git-upload-pack", serverBaseURL, repoID)
+	// gitURL := fmt.Sprintf("%s/api/mgit/repos/%s/git-upload-pack", serverBaseURL, repoID)
+	gitURL := fmt.Sprintf("%s/api/mgit/repos/%s", serverBaseURL, repoID)
+
+	// Use git clone with the -c option for Authorization header
+	authHeader := fmt.Sprintf("http.extraHeader=Authorization: Bearer %s", token)
+	// Debug print statements
+	fmt.Println("Debug info for git clone:")
+	fmt.Printf("  Auth header config: %s\n", authHeader)
+	fmt.Printf("  Token: %s\n", token)
+	fmt.Printf("  Git URL: %s\n", gitURL)
+	fmt.Printf("  Destination: %s\n", destination)
 	
 	// Use git clone with the temporary config
-	cmd := exec.Command("git", "clone", "--config-file", tempConfigPath, gitURL, destination)
+	cmd := exec.Command("git", "clone", "-c", authHeader, gitURL, destination)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	
