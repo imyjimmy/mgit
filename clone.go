@@ -156,7 +156,6 @@ func cloneRepository(url, destination, token string) error {
 
 	return nil
 }
-
 // RepositoryInfo represents repository information returned from the server
 type RepositoryInfo struct {
 	ID               string `json:"id"`

@@ -118,7 +118,7 @@ func GetConfigFilePath(global bool) string {
 		if err != nil {
 			return ""
 		}
-		return filepath.Join(home, ".mgitconfig")
+		return filepath.Join(home, ".mgitconfig", "config")
 	}
 	
 	// Local config
