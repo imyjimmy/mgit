@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -113,17 +114,27 @@ func resolveRevision(repo *git.Repository, rev string) (plumbing.Hash, error) {
 	if pubkey := GetNostrPubKey(); pubkey != "" {
 			// Read all mappings and search for matches
 			mappings := getAllNostrMappings()
-			fmt.Printf("Checking %d nostr mappings for hash '%s'\n", len(mappings), rev)
+			if len(mappings) > 0 {
+				fmt.Printf("Checking %d nostr mappings for hash '%s'\n", len(mappings), rev)
 
-			for _, mapping := range mappings {
+				for _, mapping := range mappings {
 					fmt.Printf("Comparing with: Git=%s, MGit=%s\n", mapping.GitHash, mapping.MGitHash)
+					
 					// Check for exact MGitHash match
-					if mapping.MGitHash == rev || strings.HasPrefix(mapping.MGitHash, rev) {
+					if mapping.MGitHash == rev {
+							fmt.Printf("Found mapping: MGit=%s -> Git=%s\n", rev, mapping.GitHash)
 							return plumbing.NewHash(mapping.GitHash), nil
 					}
+					
+					// Check for prefix match if it's a partial hash
+					if len(rev) >= 4 && len(rev) < 40 && strings.HasPrefix(mapping.MGitHash, rev) {
+							fmt.Printf("Found mapping for partial hash: MGit=%s -> Git=%s\n", mapping.MGitHash, mapping.GitHash)
+							return plumbing.NewHash(mapping.GitHash), nil
+					}
+				}
 			}
+			fmt.Printf("No matching MGit hash found in mappings\n")
 	} else { fmt.Printf("no nostr pubkey!") }
-
 	return plumbing.ZeroHash, fmt.Errorf("revision not found")
 }
 
@@ -159,67 +170,45 @@ func displayCommit(commit *object.Commit) {
 	fmt.Println()
 }
 
-// showCommitDiff shows the diff for a commit
+// showCommitDiff shows the diff for a commit using git's diff command
 func showCommitDiff(repo *git.Repository, commit *object.Commit) {
-	// Get the tree for this commit
-	tree, err := commit.Tree()
+	// Get the repository path
+	wt, err := repo.Worktree()
 	if err != nil {
-		fmt.Printf("Error getting tree: %s\n", err)
-		return
-	}
-
-	// Get parent commit (if any)
-	var parentTree *object.Tree
-	if commit.NumParents() > 0 {
-		parent, err := commit.Parents().Next()
-		if err == nil {
-			parentTree, err = parent.Tree()
-			if err != nil {
-				fmt.Printf("Error getting parent tree: %s\n", err)
-				return
-			}
-		}
-	}
-
-	// If we have a parent tree, show the diff
-	if parentTree != nil {
-		changes, err := object.DiffTree(parentTree, tree)
-		if err != nil {
-			fmt.Printf("Error computing diff: %s\n", err)
+			fmt.Printf("Error getting worktree: %s\n", err)
 			return
-		}
-
-		for _, change := range changes {
-			displayFileDiff(change)
-		}
-	} else {
-		// No parent, show the initial commit files
-		files := tree.Files()
-		
-		err = files.ForEach(func(f *object.File) error {
-			fmt.Printf("diff --git a/%s b/%s\n", f.Name, f.Name)
-			fmt.Printf("new file mode %o\n", f.Mode)
-			fmt.Printf("--- /dev/null\n")
-			fmt.Printf("+++ b/%s\n", f.Name)
-
-			content, err := f.Contents()
-			if err != nil {
-				return err
-			}
-
-			fmt.Println("@@ -0,0 +1," + fmt.Sprintf("%d", len(strings.Split(content, "\n"))) + " @@")
-			for _, line := range strings.Split(content, "\n") {
-				if line != "" {
-					fmt.Printf("+%s\n", line)
-				}
-			}
-			fmt.Println()
-			return nil
-		})
-		if err != nil {
-			fmt.Printf("Error iterating files: %s\n", err)
-		}
 	}
+	repoPath := wt.Filesystem.Root()
+
+	// Prepare git command to show the diff
+	var cmd *exec.Cmd
+	var args []string
+
+	// For commits with a parent, we don't need to handle the parent specially
+	// git show will automatically compare with the parent
+	args = []string{"-C", repoPath, "show", "--no-color", "--patch", commit.Hash.String()}
+	
+	cmd = exec.Command("git", args...)
+	
+	// Run the command and capture output
+	output, err := cmd.Output()
+	if err != nil {
+			fmt.Printf("Error executing git diff: %s\n", err)
+			if exitErr, ok := err.(*exec.ExitError); ok {
+					fmt.Printf("git diff stderr: %s\n", string(exitErr.Stderr))
+			}
+			return
+	}
+	
+	// Extract just the diff part (after the commit information)
+	diffOutput := string(output)
+	diffStart := strings.Index(diffOutput, "diff --git")
+	if diffStart >= 0 {
+			diffOutput = diffOutput[diffStart:]
+	}
+	
+	// Print the diff
+	fmt.Println(diffOutput)
 }
 
 // displayFileDiff shows the diff for a single file change
@@ -296,45 +285,41 @@ func displayFileDiff(change *object.Change) {
 		}
 	} else {
 		// Modified file - compute the diff
-		fmt.Printf("--- a/%s\n", fromName)
-		fmt.Printf("+++ b/%s\n", toName)
+    fmt.Printf("--- a/%s\n", fromName)
+    fmt.Printf("+++ b/%s\n", toName)
 
-		// Simple line-by-line diff for modified files
-		// In a real implementation, you'd want to use a proper diff algorithm
-		fromContent, err := from.Contents()
-		if err != nil {
-			fmt.Printf("Error getting file contents: %s\n", err)
-			return
-		}
+    // Get file contents
+    fromContent, err := from.Contents()
+    if err != nil {
+        fmt.Printf("Error getting file contents: %s\n", err)
+        return
+    }
 
-		toContent, err := to.Contents()
-		if err != nil {
-			fmt.Printf("Error getting file contents: %s\n", err)
-			return
-		}
+    toContent, err := to.Contents()
+    if err != nil {
+        fmt.Printf("Error getting file contents: %s\n", err)
+        return
+    }
 
-		// Very simple diff - just show old and new content
-		// In a real implementation, you'd use a proper diff algorithm
-		fromLines := strings.Split(fromContent, "\n")
-		toLines := strings.Split(toContent, "\n")
+    // Show complete diff of the files
+    fromLines := strings.Split(fromContent, "\n")
+    toLines := strings.Split(toContent, "\n")
 
-		fmt.Printf("@@ -1,%d +1,%d @@\n", len(fromLines), len(toLines))
-		
-		// For simplicity, just show a few lines with + and -
-		// A real implementation would compute actual line differences
-		for i := 0; i < min(len(fromLines), 3); i++ {
-			if fromLines[i] != "" {
-				fmt.Printf("-%s\n", fromLines[i])
-			}
-		}
-		for i := 0; i < min(len(toLines), 3); i++ {
-			if toLines[i] != "" {
-				fmt.Printf("+%s\n", toLines[i])
-			}
-		}
-		if len(fromLines) > 3 || len(toLines) > 3 {
-			fmt.Println("... (diff truncated)")
-		}
+    fmt.Printf("@@ -1,%d +1,%d @@\n", len(fromLines), len(toLines))
+    
+    // Show all lines from the old file with - prefix
+    for _, line := range fromLines {
+        if line != "" {
+            fmt.Printf("-%s\n", line)
+        }
+    }
+    
+    // Show all lines from the new file with + prefix
+    for _, line := range toLines {
+        if line != "" {
+            fmt.Printf("+%s\n", line)
+        }
+    }
 	}
 	fmt.Println()
 }
