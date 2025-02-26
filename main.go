@@ -24,7 +24,7 @@ func main() {
 	case "init":
 		initRepo(args)
 	case "clone":
-		cloneRepo(args)
+		HandleClone(args)
 	case "add":
 		addFiles(args)
 	case "commit":
@@ -45,6 +45,8 @@ func main() {
 		HandleShow(args)
 	case "config":
 		HandleConfig(args)
+	case "upload-pack":
+		HandleUploadPack(args)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -83,29 +85,6 @@ func initRepo(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Initialized empty Git repository in %s\n", path)
-}
-
-func cloneRepo(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: mgit clone <url> [path]")
-		os.Exit(1)
-	}
-
-	url := args[0]
-	path := "."
-	if len(args) > 1 {
-		path = args[1]
-	}
-
-	_, err := git.PlainClone(path, false, &git.CloneOptions{
-		URL:      url,
-		Progress: os.Stdout,
-	})
-	if err != nil {
-		fmt.Printf("Error cloning repository: %s\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Cloned repository %s to %s\n", url, path)
 }
 
 func getRepo() *git.Repository {
