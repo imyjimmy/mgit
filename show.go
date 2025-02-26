@@ -115,20 +115,20 @@ func resolveRevision(repo *git.Repository, rev string) (plumbing.Hash, error) {
 			// Read all mappings and search for matches
 			mappings := getAllNostrMappings()
 			if len(mappings) > 0 {
-				fmt.Printf("Checking %d nostr mappings for hash '%s'\n", len(mappings), rev)
+				// fmt.Printf("Checking %d nostr mappings for hash '%s'\n", len(mappings), rev)
 
 				for _, mapping := range mappings {
-					fmt.Printf("Comparing with: Git=%s, MGit=%s\n", mapping.GitHash, mapping.MGitHash)
+					// fmt.Printf("Comparing with: Git=%s, MGit=%s\n", mapping.GitHash, mapping.MGitHash)
 					
 					// Check for exact MGitHash match
 					if mapping.MGitHash == rev {
-							fmt.Printf("Found mapping: MGit=%s -> Git=%s\n", rev, mapping.GitHash)
+							// fmt.Printf("Found mapping: MGit=%s -> Git=%s\n", rev, mapping.GitHash)
 							return plumbing.NewHash(mapping.GitHash), nil
 					}
 					
 					// Check for prefix match if it's a partial hash
 					if len(rev) >= 4 && len(rev) < 40 && strings.HasPrefix(mapping.MGitHash, rev) {
-							fmt.Printf("Found mapping for partial hash: MGit=%s -> Git=%s\n", mapping.MGitHash, mapping.GitHash)
+							// fmt.Printf("Found mapping for partial hash: MGit=%s -> Git=%s\n", mapping.MGitHash, mapping.GitHash)
 							return plumbing.NewHash(mapping.GitHash), nil
 					}
 				}
