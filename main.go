@@ -28,7 +28,7 @@ func main() {
 	case "add":
 		addFiles(args)
 	case "commit":
-		commitChanges(args)
+		HandleMGitCommit(args)
 	case "push":
 		pushChanges(args)
 	case "pull":
@@ -40,9 +40,11 @@ func main() {
 	case "checkout":
 		checkoutBranch(args)
 	case "log":
-		showLog(args)
+		HandleMGitLog(args)
 	case "show":
-		HandleShow(args)
+		HandleMGitShow(args)
+	case "verify":
+		HandleMGitVerify(args)
 	case "config":
 		HandleConfig(args)
 	case "upload-pack":

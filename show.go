@@ -41,6 +41,34 @@ func HandleShow(args []string) {
 	showCommitDiff(repo, commit)
 }
 
+// HandleMGitShow handles the mgit mshow command, showing a specific MGit commit
+func HandleMGitShow(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: mgit mshow <hash>")
+		os.Exit(1)
+	}
+
+	hash := args[0]
+	storage := NewMGitStorage()
+
+	commit, err := storage.GetCommit(hash)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		os.Exit(1)
+	}
+
+	printMGitCommit(commit)
+
+	// Show parent information
+	if len(commit.ParentHashes) > 0 {
+		fmt.Println("Parents:")
+		for _, parent := range commit.ParentHashes {
+			fmt.Printf("  %s\n", parent)
+		}
+		fmt.Println()
+	}
+}
+
 // resolveRevision resolves a revision (branch, tag, commit hash) to a commit hash
 func resolveRevision(repo *git.Repository, rev string) (plumbing.Hash, error) {
 	// If it's HEAD, resolve it
