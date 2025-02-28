@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -28,7 +30,7 @@ func main() {
 	case "add":
 		addFiles(args)
 	case "commit":
-		commitChanges(args)
+		HandleMGitCommit(args)
 	case "push":
 		pushChanges(args)
 	case "pull":
@@ -40,9 +42,11 @@ func main() {
 	case "checkout":
 		checkoutBranch(args)
 	case "log":
-		showLog(args)
+		HandleMGitLog(args)
 	case "show":
-		HandleShow(args)
+		HandleMGitShow(args)
+	case "verify":
+		HandleMGitVerify(args)
 	case "config":
 		HandleConfig(args)
 	case "upload-pack":
@@ -73,6 +77,17 @@ func printUsage() {
 	fmt.Println("  config          Get and set configuration values")
 }
 
+/* 
+	Runs the standard Git initialization process
+	Gets the path to the .gitignore file in the newly created repository
+	Checks if the .gitignore file already exists
+
+	If it does, reads its current content
+	Verifies if .mgit is already in the .gitignore file
+
+	If not, appends .mgit/ to the file with a trailing newline
+	Provides user feedback when the .gitignore file is updated
+*/
 func initRepo(args []string) {
 	path := "."
 	if len(args) > 0 {
@@ -85,6 +100,38 @@ func initRepo(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Initialized empty Git repository in %s\n", path)
+	
+	// Add .mgit to .gitignore
+	gitignorePath := filepath.Join(path, ".gitignore")
+	
+	// Check if .gitignore already exists
+	var content []byte
+	if _, err := os.Stat(gitignorePath); !os.IsNotExist(err) {
+		// Read existing content
+		content, err = os.ReadFile(gitignorePath)
+		if err != nil {
+			fmt.Printf("Warning: Failed to read .gitignore: %s\n", err)
+			return
+		}
+	}
+	
+	// Check if .mgit is already in .gitignore
+	if !strings.Contains(string(content), ".mgit") {
+		// Append .mgit to .gitignore (with newline)
+		newContent := string(content)
+		if len(newContent) > 0 && !strings.HasSuffix(newContent, "\n") {
+			newContent += "\n"
+		}
+		newContent += ".mgit/\n"
+		
+		// Write back to .gitignore
+		err = os.WriteFile(gitignorePath, []byte(newContent), 0644)
+		if err != nil {
+			fmt.Printf("Warning: Failed to update .gitignore: %s\n", err)
+			return
+		}
+		fmt.Println("Added .mgit/ to .gitignore")
+	}
 }
 
 func getRepo() *git.Repository {

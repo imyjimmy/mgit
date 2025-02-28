@@ -42,6 +42,57 @@ func HandleShow(args []string) {
 	showCommitDiff(repo, commit)
 }
 
+// HandleMGitShow handles the mgit show command, showing a specific MGit commit
+func HandleMGitShow(args []string) {
+	if len(args) < 1 {
+			fmt.Println("Usage: mgit show <hash>")
+			os.Exit(1)
+	}
+
+	hash := args[0]
+	storage := NewMGitStorage()
+
+	// Get the MGit commit
+	mgitCommit, err := storage.GetCommit(hash)
+	if err != nil {
+			fmt.Printf("Error: %s\n", err)
+			os.Exit(1)
+	}
+
+	// Print the MGit commit details
+	printMGitCommit(mgitCommit)
+
+	// Show parent information
+	if len(mgitCommit.ParentHashes) > 0 {
+			fmt.Println("Parents:")
+			for _, parent := range mgitCommit.ParentHashes {
+					fmt.Printf("  %s\n", parent)
+			}
+			fmt.Println()
+	}
+
+	// Get the corresponding Git hash
+	gitHash := mgitCommit.GitHash
+	if gitHash == "" {
+			fmt.Println("No Git hash found for this MGit commit")
+			return
+	}
+
+	// Get repository
+	repo := getRepo()
+
+	// Get the Git commit object
+	gitCommitHash := plumbing.NewHash(gitHash)
+	gitCommit, err := repo.CommitObject(gitCommitHash)
+	if err != nil {
+			fmt.Printf("Error getting Git commit: %s\n", err)
+			return
+	}
+
+	// Show the diff using the existing function
+	showCommitDiff(repo, gitCommit)
+}
+
 // resolveRevision resolves a revision (branch, tag, commit hash) to a commit hash
 func resolveRevision(repo *git.Repository, rev string) (plumbing.Hash, error) {
 	// If it's HEAD, resolve it
