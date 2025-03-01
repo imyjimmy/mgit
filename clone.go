@@ -90,11 +90,15 @@ func getTokenForRepo(repoURL string) string {
 
 	// Find the token for the repository
 	for _, t := range store.Tokens {
-		// Check if the repo URL matches
-		if matchRepoURL(t.RepoURL, repoURL) {
-			return t.Token
-		}
-	}
+    // Add diagnostic print statement
+    fmt.Printf("Comparing URLs - Stored: %s, Current: %s\n", t.RepoURL, repoURL)
+    
+    // Check if the repo URL matches
+    if matchRepoURL(t.RepoURL, repoURL) {
+        fmt.Printf("Found matching token for %s\n", repoURL)
+        return t.Token
+    }
+}
 
 	fmt.Println("No authentication token found for this repository. Please authenticate first using the web interface.")
 	os.Exit(1)
@@ -107,7 +111,40 @@ func matchRepoURL(storedURL, providedURL string) bool {
 	storedURL = strings.TrimSuffix(strings.TrimSuffix(storedURL, "/"), ".git")
 	providedURL = strings.TrimSuffix(strings.TrimSuffix(providedURL, "/"), ".git")
 	
-	return storedURL == providedURL
+	fmt.Printf("Matching URLs - Stored: %s, Provided: %s\n", storedURL, providedURL)
+	
+	// Check for exact match first
+	if storedURL == providedURL {
+			return true
+	}
+	
+	// Extract the repository ID from both URLs
+	storedRepoID := extractRepoIDFromAnyURL(storedURL)
+	providedRepoID := extractRepoIDFromAnyURL(providedURL)
+	
+	fmt.Printf("Extracted RepoIDs - Stored: %s, Provided: %s\n", storedRepoID, providedRepoID)
+	
+	// Consider it a match if we can extract valid repo IDs and they match
+	return storedRepoID != "" && providedRepoID != "" && storedRepoID == providedRepoID
+}
+
+// extractRepoIDFromAnyURL extracts the repository ID from any URL format
+func extractRepoIDFromAnyURL(url string) string {
+	// Handle API format: http://localhost:3003/api/mgit/repos/hello-world
+	if strings.Contains(url, "/api/mgit/repos/") {
+			parts := strings.Split(url, "/api/mgit/repos/")
+			if len(parts) > 1 {
+					return parts[1]
+			}
+	}
+	
+	// Handle direct format: http://localhost:3003/hello-world
+	parts := strings.Split(url, "/")
+	if len(parts) > 0 {
+			return parts[len(parts)-1]
+	}
+	
+	return ""
 }
 
 // getTokenConfigPath returns the path to the token config file
@@ -280,7 +317,7 @@ func fetchMGitMetadata(url, destination, token string) error {
 	// Create the request
 	req, err := http.NewRequest("GET", metadataURL, nil)
 	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
+			return fmt.Errorf("error creating request: %w", err)
 	}
 	
 	// Add the authorization header
@@ -290,35 +327,41 @@ func fetchMGitMetadata(url, destination, token string) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error making request: %w", err)
+			return fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
 	
 	// Check the response status
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error response from server: %s", string(bodyBytes))
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("error response from server: %s", string(bodyBytes))
 	}
 	
-	// Create the .mgit directory
+	// Parse the response to get the mappings
+	var mappings []interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&mappings); err != nil {
+			return fmt.Errorf("error parsing metadata response: %w", err)
+	}
+	
+	// Create the .mgit directory structure
 	mgitDir := filepath.Join(destination, ".mgit")
-	if err := os.MkdirAll(mgitDir, 0755); err != nil {
-		return fmt.Errorf("error creating .mgit directory: %w", err)
+	mappingsDir := filepath.Join(mgitDir, "mappings")
+	if err := os.MkdirAll(mappingsDir, 0755); err != nil {
+			return fmt.Errorf("error creating .mgit/mappings directory: %w", err)
 	}
 	
-	// Write the nostr_mappings.json file
-	mappingsPath := filepath.Join(mgitDir, "nostr_mappings.json")
-	mappingsFile, err := os.Create(mappingsPath)
+	// Write the hash_mappings.json file
+	mappingsPath := filepath.Join(mappingsDir, "hash_mappings.json")
+	mappingsJSON, err := json.MarshalIndent(mappings, "", "  ")
 	if err != nil {
-		return fmt.Errorf("error creating nostr mappings file: %w", err)
-	}
-	defer mappingsFile.Close()
-	
-	// Copy the response body to the mappings file
-	if _, err := io.Copy(mappingsFile, resp.Body); err != nil {
-		return fmt.Errorf("error writing nostr mappings file: %w", err)
+			return fmt.Errorf("error serializing mappings: %w", err)
 	}
 	
+	if err := os.WriteFile(mappingsPath, mappingsJSON, 0644); err != nil {
+			return fmt.Errorf("error writing hash_mappings.json file: %w", err)
+	}
+	
+	fmt.Printf("Successfully fetched and stored MGit metadata\n")
 	return nil
 }
 

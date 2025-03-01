@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 func main() {
@@ -209,29 +209,28 @@ func commitChanges(args []string) {
 func pushChanges(args []string) {
 	repo := getRepo()
 	
-	// Get authentication if provided through environment variables
-	auth := &http.BasicAuth{
-		Username: os.Getenv("MGIT_USERNAME"),
-		Password: os.Getenv("MGIT_PASSWORD"),
+	// Get the remote URL
+	remoteURL := ""
+	remote, err := repo.Remote("origin")
+	if err == nil && len(remote.Config().URLs) > 0 {
+			remoteURL = remote.Config().URLs[0]
 	}
 
-	// Don't use auth if credentials aren't provided
-	var authOption *http.BasicAuth
-	if auth.Username != "" && auth.Password != "" {
-		authOption = auth
-	}
-
-	err := repo.Push(&git.PushOptions{
-		Auth:     authOption,
-		Progress: os.Stdout,
-	})
-	if err != nil {
-		if err == git.NoErrAlreadyUpToDate {
-			fmt.Println("Everything up-to-date")
-			return
-		}
-		fmt.Printf("Error pushing changes: %s\n", err)
-		os.Exit(1)
+	// Get token for the repository
+	token := getTokenForRepo(remoteURL)
+	
+	// Use git push with temporary header configuration
+	cmd := exec.Command("git", "-c", 
+			"http.extraHeader=Authorization: Bearer "+token, 
+			"push", "origin", "HEAD")
+	
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Dir = "."
+	
+	if err := cmd.Run(); err != nil {
+			fmt.Printf("Error pushing changes: %s\n", err)
+			os.Exit(1)
 	}
 	fmt.Println("Changes pushed to remote")
 }
