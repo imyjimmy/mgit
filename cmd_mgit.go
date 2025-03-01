@@ -56,31 +56,99 @@ func HandleMGitCommit(args []string) {
 
 // HandleMGitLog handles the mgit log command for the MGit hash chain
 func HandleMGitLog(args []string) {
+	// Parse command line flags
+	oneline := false
+	graph := false
+	decorate := false
+	all := false
+	maxCount := 10 // Default
+	
+	for _, arg := range args {
+			switch arg {
+			case "--oneline":
+					oneline = true
+			case "--graph":
+					graph = true
+			case "--decorate=short", "--decorate":
+					decorate = true
+			case "--all":
+					all = true
+			}
+			
+			// Handle -n flag for limiting commits
+			if strings.HasPrefix(arg, "-n") {
+					if len(arg) > 2 {
+							fmt.Sscanf(arg[2:], "%d", &maxCount)
+					} else {
+							// Look for the next argument
+							for i, a := range args {
+									if a == "-n" && i+1 < len(args) {
+											fmt.Sscanf(args[i+1], "%d", &maxCount)
+											break
+									}
+							}
+					}
+			}
+	}
+
 	// Initialize storage
 	storage := NewMGitStorage()
+	repo := getRepo()
+
+	// Collect starting commits based on flags
+	startingCommits := []*MCommitStruct{}
 
 	// Get the HEAD commit
 	headCommit, err := storage.GetHeadCommit()
 	if err != nil {
-		fmt.Printf("Error getting HEAD commit: %s\n", err)
-		os.Exit(1)
+			fmt.Printf("Error getting HEAD commit: %s\n", err)
+			os.Exit(1)
 	}
 
-	// Determine how many commits to show
-	maxCount := 10 // Default
-	for i, arg := range args {
-		if arg == "-n" && i+1 < len(args) {
-			fmt.Sscanf(args[i+1], "%d", &maxCount)
-			break
+	// If --all flag is specified, include commits from all branches
+	if all {
+		// Get all branches
+		refs, err := repo.References()
+		if err == nil {
+				_ = refs.ForEach(func(ref *plumbing.Reference) error {
+						if ref.Name().IsBranch() {
+								// Skip if this is the current branch (already added as HEAD)
+								if headCommit != nil && ref.Hash().String() == headCommit.GitHash {
+										return nil
+								}
+								
+								// Get MGit hash for this Git hash
+								mgitHash, err := storage.GetMGitHashFromGit(ref.Hash().String())
+								if err == nil {
+										commit, err := storage.GetCommit(mgitHash)
+										if err == nil {
+												startingCommits = append(startingCommits, commit)
+										}
+								}
+						}
+						return nil
+				})
 		}
 	}
+	
+	headRef, err := repo.Head()
+	currentBranch := ""
+	if err == nil && headRef.Name().IsBranch() {
+			currentBranch = headRef.Name().Short()
+	}
 
-	// Print the commit history
-	fmt.Println("MGit Commit History:")
-	fmt.Println("====================")
+	// If not using special formatting, use the default format
+	if !oneline && !graph {
+			fmt.Println("MGit Commit History:")
+			fmt.Println("====================")
+	}
 
 	// Start with head commit
-	printMGitCommit(headCommit)
+	if oneline {
+			printMGitCommitOneline(headCommit, graph, decorate, currentBranch)
+	} else {
+			printMGitCommit(headCommit)
+	}
 	count := 1
 
 	// Process parents recursively with a breadth-first approach
@@ -88,30 +156,63 @@ func HandleMGitLog(args []string) {
 	queue := headCommit.ParentHashes
 
 	for len(queue) > 0 && count < maxCount {
-		currentHash := queue[0]
-		queue = queue[1:]
+			currentHash := queue[0]
+			queue = queue[1:]
 
-		if visited[currentHash] {
-			continue
-		}
-
-		commit, err := storage.GetCommit(currentHash)
-		if err != nil {
-			fmt.Printf("Warning: Could not load commit %s: %s\n", currentHash, err)
-			continue
-		}
-
-		printMGitCommit(commit)
-		count++
-		visited[currentHash] = true
-
-		// Add parents to queue
-		for _, parent := range commit.ParentHashes {
-			if !visited[parent] {
-				queue = append(queue, parent)
+			if visited[currentHash] {
+					continue
 			}
-		}
+
+			commit, err := storage.GetCommit(currentHash)
+			if err != nil {
+					fmt.Printf("Warning: Could not load commit %s: %s\n", currentHash, err)
+					continue
+			}
+
+			if oneline {
+					printMGitCommitOneline(commit, graph, decorate, "")
+			} else {
+					printMGitCommit(commit)
+			}
+			count++
+			visited[currentHash] = true
+
+			// Add parents to queue
+			for _, parent := range commit.ParentHashes {
+					if !visited[parent] {
+							queue = append(queue, parent)
+					}
+			}
 	}
+}
+
+// printMGitCommitOneline prints a single MGit commit in oneline format
+func printMGitCommitOneline(commit *MCommitStruct, showGraph bool, decorate bool, branchName string) {
+	// First 7 characters of hash (like git)
+	shortHash := commit.MGitHash
+	if len(shortHash) > 7 {
+			shortHash = shortHash[:7]
+	}
+	
+	// Add graph symbol if requested
+	prefix := ""
+	if showGraph {
+			prefix = "* "
+	}
+	
+	// Add decoration if requested
+	decoration := ""
+	if decorate && branchName != "" {
+			decoration = fmt.Sprintf(" (HEAD -> %s)", branchName)
+	}
+	
+	// Get first line of commit message
+	message := commit.Message
+	if idx := strings.Index(message, "\n"); idx != -1 {
+			message = message[:idx]
+	}
+	
+	fmt.Printf("%s%s%s %s\n", prefix, shortHash, decoration, message)
 }
 
 // printMGitCommit prints a single MGit commit
@@ -121,20 +222,20 @@ func printMGitCommit(commit *MCommitStruct) {
 	
 	pubkeyInfo := ""
 	if commit.Author.Pubkey != "" {
-		pubkeyInfo = fmt.Sprintf(" <%s>", commit.Author.Pubkey)
+			pubkeyInfo = fmt.Sprintf(" <%s>", commit.Author.Pubkey)
 	}
 	
 	fmt.Printf("Author: %s <%s>%s\n", 
-		commit.Author.Name, 
-		commit.Author.Email,
-		pubkeyInfo)
+			commit.Author.Name, 
+			commit.Author.Email,
+			pubkeyInfo)
 	
 	fmt.Printf("Date:   %s\n\n", 
-		commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
+			commit.Author.When.Format("Mon Jan 2 15:04:05 2006 -0700"))
 	
 	// Print the commit message with indentation
 	for _, line := range strings.Split(commit.Message, "\n") {
-		fmt.Printf("    %s\n", line)
+			fmt.Printf("    %s\n", line)
 	}
 	
 	fmt.Println()
