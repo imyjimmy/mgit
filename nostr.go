@@ -174,25 +174,25 @@ func getNostrMappingFilePath() string {
 
 // getAllNostrMappings retrieves all nostr commit mappings
 func getAllNostrMappings() []NostrCommitMapping {
-	// Get the mapping file path
-	mappingFile := getNostrMappingFilePath()
+	// Use the correct path for hash_mappings.json
+	mappingFile := ".mgit/mappings/hash_mappings.json"
 	
 	// Check if the mapping file exists
 	if _, err := os.Stat(mappingFile); os.IsNotExist(err) {
-			return []NostrCommitMapping{} // No mapping file exists yet
+			return []NostrCommitMapping{} // No mapping file exists
 	}
 	
 	// Read the mapping file
 	data, err := os.ReadFile(mappingFile)
 	if err != nil {
-			fmt.Printf("Warning: Error reading nostr mapping file: %s\n", err)
+			fmt.Printf("Warning: Error reading hash mappings file: %s\n", err)
 			return []NostrCommitMapping{}
 	}
 	
 	// Parse the mappings
 	var mappings []NostrCommitMapping
 	if err := json.Unmarshal(data, &mappings); err != nil {
-			fmt.Printf("Warning: Error parsing nostr mapping file: %s\n", err)
+			fmt.Printf("Warning: Error parsing hash mappings file: %s\n", err)
 			return []NostrCommitMapping{}
 	}
 	
