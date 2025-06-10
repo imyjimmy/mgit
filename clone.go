@@ -36,16 +36,48 @@ type CloneOptions struct {
 // HandleClone handles the clone command
 func HandleClone(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: mgit clone <url> [destination]")
+		fmt.Println("Usage: mgit clone [-jwt <token>] <url> [destination]")
 		os.Exit(1)
 	}
 
-	url := args[0]
-	destination := ""
-	if len(args) > 1 {
-		destination = args[1]
-	} else {
-		// If no destination is specified, use the last part of the URL as the directory name
+	// Parse arguments for -jwt flag
+	var jwtToken string
+	var url string
+	var destination string
+	
+	// Parse command line arguments
+	i := 0
+	for i < len(args) {
+		if args[i] == "-jwt" {
+			if i+1 >= len(args) {
+				fmt.Println("Error: -jwt flag requires a token argument")
+				fmt.Println("Usage: mgit clone [-jwt <token>] <url> [destination]")
+				os.Exit(1)
+			}
+			jwtToken = args[i+1]
+			i += 2 // Skip both -jwt and token
+		} else if url == "" {
+			url = args[i]
+			i++
+		} else if destination == "" {
+			destination = args[i]
+			i++
+		} else {
+			fmt.Printf("Error: unexpected argument '%s'\n", args[i])
+			fmt.Println("Usage: mgit clone [-jwt <token>] <url> [destination]")
+			os.Exit(1)
+		}
+	}
+
+	// Validate that we have at least a URL
+	if url == "" {
+		fmt.Println("Error: repository URL is required")
+		fmt.Println("Usage: mgit clone [-jwt <token>] <url> [destination]")
+		os.Exit(1)
+	}
+
+	// If no destination is specified, use the last part of the URL as the directory name
+	if destination == "" {
 		parts := strings.Split(url, "/")
 		destination = strings.TrimSuffix(parts[len(parts)-1], ".git")
 	}
@@ -54,7 +86,15 @@ func HandleClone(args []string) {
 	url = strings.TrimSuffix(url, "/")
 
 	// Get token for the repository
-	token := getTokenForRepo(url)
+	var token string
+	if jwtToken != "" {
+		// Use the provided JWT token
+		fmt.Println("Using provided JWT token for authentication")
+		token = jwtToken
+	} else {
+		// Fall back to stored token lookup
+		token = getTokenForRepo(url)
+	}
 
 	// Clone the repository
 	err := cloneRepository(url, destination, token)
@@ -93,15 +133,15 @@ func getTokenForRepo(repoURL string) string {
 
 	// Find the token for the repository
 	for _, t := range store.Tokens {
-    // Add diagnostic print statement
-    fmt.Printf("Comparing URLs - Stored: %s, Current: %s\n", t.RepoURL, repoURL)
-    
-    // Check if the repo URL matches
-    if matchRepoURL(t.RepoURL, repoURL) {
-        fmt.Printf("Found matching token for %s\n", repoURL)
-        return t.Token
-    }
-}
+		// Add diagnostic print statement
+		fmt.Printf("Comparing URLs - Stored: %s, Current: %s\n", t.RepoURL, repoURL)
+		
+		// Check if the repo URL matches
+		if matchRepoURL(t.RepoURL, repoURL) {
+			fmt.Printf("Found matching token for %s\n", repoURL)
+			return t.Token
+		}
+	}
 
 	fmt.Println("No authentication token found for this repository. Please authenticate first using the web interface.")
 	os.Exit(1)
@@ -178,84 +218,47 @@ func cloneRepository(url, destination, token string) error {
 	fmt.Printf("Repository: %s\nAccess level: %s\n", repoInfo.Name, repoInfo.Access)
 
 	// First, clone the Git data using git-upload-pack
-	fmt.Println("Cloning Git repository data...")
-	if err := cloneGitData(url, destination, token); err != nil {
-		return fmt.Errorf("error cloning Git data: %w", err)
+	fmt.Println("Cloning Git repository...")
+	if err := gitClone(url, destination, token); err != nil {
+		return fmt.Errorf("error cloning Git repository: %w", err)
 	}
 
-	// Then, fetch and set up the MGit metadata
-	fmt.Println("Fetching MGit metadata...")
+	// Fetch and set up MGit metadata
+	fmt.Println("Setting up MGit metadata...")
 	if err := fetchMGitMetadata(url, destination, token); err != nil {
-		return fmt.Errorf("error fetching MGit metadata: %w", err)
+		// Don't fail the clone if metadata fetch fails - log warning and continue
+		fmt.Printf("Warning: Failed to fetch MGit metadata: %s\n", err)
 	}
 
-	// Reconstruct MGit objects from Git objects using mappings
-	fmt.Println("Reconstructing MGit objects from Git commits...")
+	// Reconstruct MGit objects from mappings
+	fmt.Println("Reconstructing MGit objects...")
 	if err := reconstructMGitObjects(destination); err != nil {
-			fmt.Printf("Warning: Could not fully reconstruct MGit objects: %s\n", err)
-			// Don't fail the clone operation, but warn the user
+		// Don't fail the clone if reconstruction fails - log warning and continue
+		fmt.Printf("Warning: Failed to reconstruct MGit objects: %s\n", err)
 	}
 
-	/* diagnostic code */
-	// Verify MGit setup
-	fmt.Println("Verifying MGit repository setup...")
-
-	// Check HEAD file
-	headPath := filepath.Join(destination, ".mgit", "HEAD")
-	if _, err := os.Stat(headPath); os.IsNotExist(err) {
-			fmt.Println("Warning: MGit HEAD file does not exist")
-	} else {
-			headContent, err := os.ReadFile(headPath)
-			if err != nil {
-					fmt.Printf("Warning: Could not read HEAD file: %s\n", err)
-			} else {
-					fmt.Printf("MGit HEAD points to: %s\n", string(headContent))
-			}
-	}
-
-	// Check refs directory
-	refsPath := filepath.Join(destination, ".mgit", "refs", "heads")
-	if _, err := os.Stat(refsPath); os.IsNotExist(err) {
-			fmt.Println("Warning: MGit refs/heads directory does not exist")
-	} else {
-			files, err := os.ReadDir(refsPath)
-			if err != nil {
-					fmt.Printf("Warning: Could not read refs directory: %s\n", err)
-			} else if len(files) == 0 {
-					fmt.Println("Warning: No branch references found in MGit repository")
-			} else {
-					fmt.Println("MGit branch references:")
-					for _, file := range files {
-							refPath := filepath.Join(refsPath, file.Name())
-							refContent, _ := os.ReadFile(refPath)
-							fmt.Printf("  %s: %s\n", file.Name(), string(refContent))
-					}
-			}
-	}
-
-	// Set up the MGit configuration for the cloned repository
+	// Set up MGit configuration
 	if err := setupMGitConfig(destination, repoInfo); err != nil {
-		return fmt.Errorf("error setting up MGit configuration: %w", err)
+		return fmt.Errorf("error setting up MGit config: %w", err)
 	}
 
 	return nil
 }
 
-// RepositoryInfo represents repository information returned from the server
+// RepositoryInfo represents information about a repository
 type RepositoryInfo struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Access           string `json:"access"`
-	AuthorizedPubkey string `json:"authorized_pubkey"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Access string `json:"access"`
 }
 
-// fetchRepositoryInfo fetches repository information from the server
+// fetchRepositoryInfo fetches information about the repository
 func fetchRepositoryInfo(url, token string) (*RepositoryInfo, error) {
-	// Extract the repository ID from the URL
+	// Extract the repository ID and server base URL
 	repoID := extractRepoID(url)
-	
-	// Construct the base server URL
 	serverBaseURL := extractServerBaseURL(url)
+	
+	// Construct the URL for the repository info endpoint
 	infoURL := fmt.Sprintf("%s/api/mgit/repos/%s/info", serverBaseURL, repoID)
 	
 	// Create the request
@@ -292,43 +295,33 @@ func fetchRepositoryInfo(url, token string) (*RepositoryInfo, error) {
 
 // extractRepoID extracts the repository ID from a URL
 func extractRepoID(url string) string {
+	// Remove trailing slashes and .git suffix
+	url = strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git")
+	
+	// Get the last part of the URL
 	parts := strings.Split(url, "/")
 	return parts[len(parts)-1]
 }
 
-// extractServerBaseURL extracts the base server URL from a repository URL
+// extractServerBaseURL extracts the server base URL from a repository URL
 func extractServerBaseURL(url string) string {
-	// Remove the repo ID and any trailing path
-	lastSlashIndex := strings.LastIndex(url, "/")
-	if lastSlashIndex == -1 {
-		return url
-	}
+	// Find the last occurrence of the repository ID
+	repoID := extractRepoID(url)
 	
-	return url[:lastSlashIndex]
+	// Remove the repository ID from the end to get the base URL
+	baseURL := strings.TrimSuffix(url, "/"+repoID)
+	baseURL = strings.TrimSuffix(baseURL, repoID)
+	
+	return baseURL
 }
 
-// cloneGitData clones the Git data using git-upload-pack
-func cloneGitData(url, destination, token string) error {
-	// Extract the repository ID and server base URL
+// gitClone performs the actual Git clone operation
+func gitClone(url, destination, token string) error {
+	// Extract repository ID and server base URL for the Git endpoint
 	repoID := extractRepoID(url)
 	serverBaseURL := extractServerBaseURL(url)
 	
-	// For now, we'll use the git command with a custom header to clone the repository
-	// In a real implementation, we would use go-git or a similar library
-	
-// 	// Create a temporary config file to include the authorization header
-// 	tempConfigPath := filepath.Join(os.TempDir(), fmt.Sprintf("mgit-clone-%d.tmp", os.Getpid()))
-// 	defer os.Remove(tempConfigPath)
-	
-// 	configContent := fmt.Sprintf(`[http]
-// 	extraHeader = Authorization: Bearer %s
-// `, token)
-	
-// 	if err := os.WriteFile(tempConfigPath, []byte(configContent), 0600); err != nil {
-// 		return fmt.Errorf("error creating temporary config file: %w", err)
-// 	}
-	
-	// Construct the Git URL for the upload-pack endpoint
+	// Construct the Git URL - this should point to the Git protocol endpoint
 	// gitURL := fmt.Sprintf("%s/api/mgit/repos/%s/git-upload-pack", serverBaseURL, repoID)
 	gitURL := fmt.Sprintf("%s/api/mgit/repos/%s", serverBaseURL, repoID)
 
@@ -353,204 +346,6 @@ func cloneGitData(url, destination, token string) error {
 	return nil
 }
 
-// reconstructMGitObjects reconstructs MGit objects from Git commits using mappings
-func reconstructMGitObjects(repoPath string) error {
-	// Create necessary directory structure first
-	mgitDir := filepath.Join(repoPath, ".mgit")
-	objDir := filepath.Join(mgitDir, "objects")
-	refsDir := filepath.Join(mgitDir, "refs")
-	refsHeadsDir := filepath.Join(refsDir, "heads")
-	mappingsDir := filepath.Join(mgitDir, "mappings")
-	
-	dirs := []string{objDir, refsDir, refsHeadsDir, mappingsDir}
-	for _, dir := range dirs {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-					return fmt.Errorf("error creating MGit directory structure: %w", err)
-			}
-	}
-
-	// Open the Git repository
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-			return fmt.Errorf("error opening Git repository: %w", err)
-	}
-	
-	// Use the correct path for hash_mappings.json
-	hashMappingsPath := filepath.Join(repoPath, ".mgit", "mappings", "hash_mappings.json")
-	
-	// Check if the mappings file exists
-	if _, err = os.Stat(hashMappingsPath); os.IsNotExist(err) {
-			return fmt.Errorf("no MGit mappings found in the repository")
-	}
-	
-	// Read the mappings file
-	mappingsData, err := os.ReadFile(hashMappingsPath)
-	if err != nil {
-			return fmt.Errorf("error reading mappings file: %w", err)
-	}
-	
-	// Parse the mappings
-	var mappings []NostrCommitMapping
-	if err := json.Unmarshal(mappingsData, &mappings); err != nil {
-			return fmt.Errorf("error parsing mappings file: %w", err)
-	}
-	
-	// Create the MGit storage
-	storage := &MGitStorage{
-			RootDir: filepath.Join(repoPath, ".mgit"),
-	}
-	
-	// Initialize the MGit storage
-	if err := storage.Initialize(); err != nil {
-			return fmt.Errorf("error initializing MGit storage: %w", err)
-	}
-	
-	// Process each mapping
-	for _, mapping := range mappings {
-			// Check if the MGit object already exists
-			_, err := storage.GetCommit(mapping.MGitHash)
-			if err == nil {
-					// Object already exists, skip
-					continue
-			}
-			
-			// Get the Git commit
-			gitHash := plumbing.NewHash(mapping.GitHash)
-			gitCommit, err := repo.CommitObject(gitHash)
-			if err != nil {
-					fmt.Printf("Warning: Could not find Git commit %s: %s\n", mapping.GitHash, err)
-					continue
-			}
-			
-			// Find MGit parent hashes
-			parentMGitHashes := []string{}
-			for _, parentGitHash := range gitCommit.ParentHashes {
-					// Find corresponding MGit hash from mappings
-					for _, m := range mappings {
-							if m.GitHash == parentGitHash.String() {
-									parentMGitHashes = append(parentMGitHashes, m.MGitHash)
-									break
-							}
-					}
-			}
-			
-			// Create the MGit commit object
-			mgitCommit := &MCommitStruct{
-					Type:         MGitCommitObject,
-					MGitHash:     mapping.MGitHash,
-					GitHash:      mapping.GitHash,
-					TreeHash:     gitCommit.TreeHash.String(),
-					ParentHashes: parentMGitHashes,
-					Author: &MGitSignature{
-							Name:   gitCommit.Author.Name,
-							Email:  gitCommit.Author.Email,
-							Pubkey: mapping.Pubkey,
-							When:   gitCommit.Author.When,
-					},
-					Committer: &MGitSignature{
-							Name:   gitCommit.Committer.Name,
-							Email:  gitCommit.Committer.Email,
-							Pubkey: mapping.Pubkey,
-							When:   gitCommit.Committer.When,
-					},
-					Message:  gitCommit.Message,
-					Metadata: map[string]string{"version": "1.0"},
-			}
-			
-			// Store the MGit commit
-			if err := storage.StoreCommit(mgitCommit); err != nil {
-					fmt.Printf("Warning: Could not store MGit commit %s: %s\n", mapping.MGitHash, err)
-					continue
-			}
-			
-			fmt.Printf("Reconstructed MGit commit: %s\n", mapping.MGitHash[:7])
-	}
-	
-	// Update branch references
-	refs, err := repo.References()
-	if err != nil {
-			return fmt.Errorf("error getting references: %w", err)
-	}
-	
-	err = refs.ForEach(func(ref *plumbing.Reference) error {
-			if ref.Name().IsBranch() {
-					branchName := ref.Name().Short()
-					gitHash := ref.Hash().String()
-					
-					// Find corresponding MGit hash
-					var mgitHash string
-					for _, mapping := range mappings {
-							if mapping.GitHash == gitHash {
-									mgitHash = mapping.MGitHash
-									
-									// Update MGit branch reference
-									refPath := fmt.Sprintf("refs/heads/%s", branchName)
-									if err := storage.UpdateRef(refPath, mapping.MGitHash); err != nil {
-											fmt.Printf("Warning: Could not update branch ref %s: %s\n", branchName, err)
-									} else {
-											fmt.Printf("Set branch reference %s to MGit hash %s\n", branchName, mgitHash[:7])
-									}
-									break
-							}
-					}
-					
-					if mgitHash == "" {
-							fmt.Printf("Warning: Could not find MGit hash for branch %s at git hash %s\n", branchName, gitHash)
-					}
-			}
-			return nil
-	})
-	
-	if err != nil {
-			return fmt.Errorf("error processing references: %w", err)
-	}
-	
-	// Update HEAD
-	head, err := repo.Head()
-	if err != nil {
-			return fmt.Errorf("error getting Git HEAD: %w", err)
-	}
-	
-	// Create HEAD file pointing to the current branch
-	if head.Name().IsBranch() {
-			branchName := head.Name().Short()
-			headContent := fmt.Sprintf("ref: refs/heads/%s", branchName)
-			headPath := filepath.Join(repoPath, ".mgit", "HEAD")
-			
-			if err := os.WriteFile(headPath, []byte(headContent), 0644); err != nil {
-					return fmt.Errorf("error writing HEAD file: %w", err)
-			}
-			
-			fmt.Printf("Set HEAD to branch: %s\n", branchName)
-	} else {
-			// Detached HEAD - try to find the corresponding MGit hash
-			gitHash := head.Hash().String()
-			
-			// Find the MGit hash for this Git hash
-			var mgitHash string
-			for _, mapping := range mappings {
-					if mapping.GitHash == gitHash {
-							mgitHash = mapping.MGitHash
-							break
-					}
-			}
-			
-			if mgitHash == "" {
-					return fmt.Errorf("could not find MGit hash for detached HEAD at %s", gitHash)
-			}
-			
-			// Write the direct hash as HEAD
-			headPath := filepath.Join(repoPath, ".mgit", "HEAD")
-			if err := os.WriteFile(headPath, []byte(mgitHash), 0644); err != nil {
-					return fmt.Errorf("error writing HEAD file: %w", err)
-			}
-			
-			fmt.Printf("Set HEAD to detached commit: %s\n", mgitHash[:7])
-	}
-	
-	return nil
-}
-
 // fetchMGitMetadata fetches the MGit metadata and sets it up in the repository
 func fetchMGitMetadata(url, destination, token string) error {
 	// Extract the repository ID and server base URL
@@ -563,7 +358,7 @@ func fetchMGitMetadata(url, destination, token string) error {
 	// Create the request
 	req, err := http.NewRequest("GET", metadataURL, nil)
 	if err != nil {
-			return fmt.Errorf("error creating request: %w", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 	
 	// Add the authorization header
@@ -573,44 +368,44 @@ func fetchMGitMetadata(url, destination, token string) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-			return fmt.Errorf("error making request: %w", err)
+		return fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
 	
 	// Check the response status
 	if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("error response from server: %s", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error response from server: %s", string(bodyBytes))
 	}
 	
 	// Parse the response to get the mappings
 	var mappings []interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&mappings); err != nil {
-			return fmt.Errorf("error parsing metadata response: %w", err)
+		return fmt.Errorf("error parsing metadata response: %w", err)
 	}
 	
 	// Create the .mgit directory structure
 	mgitDir := filepath.Join(destination, ".mgit")
 	mappingsDir := filepath.Join(mgitDir, "mappings")
 	if err := os.MkdirAll(mappingsDir, 0755); err != nil {
-			return fmt.Errorf("error creating .mgit/mappings directory: %w", err)
+		return fmt.Errorf("error creating .mgit/mappings directory: %w", err)
 	}
 	
 	// Write the hash_mappings.json file
 	mappingsPath := filepath.Join(mappingsDir, "hash_mappings.json")
 	mappingsJSON, err := json.MarshalIndent(mappings, "", "  ")
 	if err != nil {
-			return fmt.Errorf("error serializing mappings: %w", err)
+		return fmt.Errorf("error serializing mappings: %w", err)
 	}
 	
 	if err := os.WriteFile(mappingsPath, mappingsJSON, 0644); err != nil {
-			return fmt.Errorf("error writing hash_mappings.json file: %w", err)
+		return fmt.Errorf("error writing hash_mappings.json file: %w", err)
 	}
 	
 	// ADDED: Also write to nostr_mappings.json for compatibility
 	nostrMappingsPath := filepath.Join(mgitDir, "nostr_mappings.json")
 	if err := os.WriteFile(nostrMappingsPath, mappingsJSON, 0644); err != nil {
-			return fmt.Errorf("error writing nostr_mappings.json file: %w", err)
+		return fmt.Errorf("error writing nostr_mappings.json file: %w", err)
 	}
 	
 	fmt.Printf("Successfully fetched and stored MGit metadata\n")
@@ -644,6 +439,193 @@ func setupMGitConfig(destination string, repoInfo *RepositoryInfo) error {
 	// Save the config
 	if err := config.Save(configPath); err != nil {
 		return fmt.Errorf("error saving MGit config: %w", err)
+	}
+	
+	return nil
+}
+
+// reconstructMGitObjects reconstructs MGit objects from Git commits using mappings
+func reconstructMGitObjects(repoPath string) error {
+	// Create necessary directory structure first
+	mgitDir := filepath.Join(repoPath, ".mgit")
+	objDir := filepath.Join(mgitDir, "objects")
+	refsDir := filepath.Join(mgitDir, "refs")
+	refsHeadsDir := filepath.Join(refsDir, "heads")
+	mappingsDir := filepath.Join(mgitDir, "mappings")
+	
+	dirs := []string{objDir, refsDir, refsHeadsDir, mappingsDir}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("error creating MGit directory structure: %w", err)
+		}
+	}
+
+	// Open the Git repository
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("error opening Git repository: %w", err)
+	}
+	
+	// Use the correct path for hash_mappings.json
+	hashMappingsPath := filepath.Join(repoPath, ".mgit", "mappings", "hash_mappings.json")
+	
+	// Check if the mappings file exists
+	if _, err = os.Stat(hashMappingsPath); os.IsNotExist(err) {
+		return fmt.Errorf("no MGit mappings found in the repository")
+	}
+	
+	// Read the mappings file
+	mappingsData, err := os.ReadFile(hashMappingsPath)
+	if err != nil {
+		return fmt.Errorf("error reading mappings file: %w", err)
+	}
+	
+	// Parse the mappings
+	var mappings []NostrCommitMapping
+	if err := json.Unmarshal(mappingsData, &mappings); err != nil {
+		return fmt.Errorf("error parsing mappings file: %w", err)
+	}
+	
+	// Create the MGit storage
+	storage := &MGitStorage{
+		RootDir: filepath.Join(repoPath, ".mgit"),
+	}
+	
+	// Initialize the MGit storage
+	if err := storage.Initialize(); err != nil {
+		return fmt.Errorf("error initializing MGit storage: %w", err)
+	}
+	
+	// Process each mapping to reconstruct MGit objects
+	for _, mapping := range mappings {
+		// Get the Git commit
+		gitHash := plumbing.NewHash(mapping.GitHash)
+		commit, err := repo.CommitObject(gitHash)
+		if err != nil {
+			fmt.Printf("Warning: Could not find Git commit %s: %s\n", mapping.GitHash, err)
+			continue
+		}
+		
+		// Create the MGit commit object
+		mgitCommit := &MCommitStruct{
+			Type:         MGitCommitObject,
+			MGitHash:     mapping.MGitHash,
+			GitHash:      mapping.GitHash,
+			Message:      commit.Message,
+			Author: &MGitSignature{
+				Name:   commit.Author.Name,
+				Email:  commit.Author.Email,
+				Pubkey: mapping.Pubkey,
+				When:   commit.Author.When,
+			},
+			Committer: &MGitSignature{
+				Name:   commit.Author.Name,
+				Email:  commit.Author.Email,
+				Pubkey: mapping.Pubkey,
+				When:   commit.Author.When,
+			},
+			ParentHashes: []string{}, // Will be filled in below
+			TreeHash:     commit.TreeHash.String(),
+		}
+		
+		// Find parent MGit hashes
+		for _, parentGitHash := range commit.ParentHashes {
+			for _, parentMapping := range mappings {
+				if parentMapping.GitHash == parentGitHash.String() {
+					mgitCommit.ParentHashes = append(mgitCommit.ParentHashes, parentMapping.MGitHash)
+					break
+				}
+			}
+		}
+		
+		// Store the MGit commit
+		if err := storage.StoreCommit(mgitCommit); err != nil {
+			fmt.Printf("Warning: Could not store MGit commit %s: %s\n", mapping.MGitHash, err)
+			continue
+		}
+		
+		fmt.Printf("Reconstructed MGit commit: %s (from Git %s)\n", mapping.MGitHash[:7], mapping.GitHash[:7])
+	}
+	
+	// Update branch references to point to MGit hashes
+	refs, err := repo.References()
+	if err != nil {
+		return fmt.Errorf("error getting references: %w", err)
+	}
+	
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsBranch() {
+			branchName := ref.Name().Short()
+			gitHash := ref.Hash().String()
+			
+			// Find the corresponding MGit hash
+			var mgitHash string
+			for _, mapping := range mappings {
+				if mapping.GitHash == gitHash {
+					mgitHash = mapping.MGitHash
+					refPath := filepath.Join(repoPath, ".mgit", "refs", "heads", branchName)
+					
+					if err := storage.UpdateRef(refPath, mapping.MGitHash); err != nil {
+						fmt.Printf("Warning: Could not update branch ref %s: %s\n", branchName, err)
+					} else {
+						fmt.Printf("Set branch reference %s to MGit hash %s\n", branchName, mgitHash[:7])
+					}
+					break
+				}
+			}
+			
+			if mgitHash == "" {
+				fmt.Printf("Warning: Could not find MGit hash for branch %s at git hash %s\n", branchName, gitHash)
+			}
+		}
+		return nil
+	})
+	
+	if err != nil {
+		return fmt.Errorf("error processing references: %w", err)
+	}
+	
+	// Update HEAD
+	head, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("error getting Git HEAD: %w", err)
+	}
+	
+	// Create HEAD file pointing to the current branch
+	if head.Name().IsBranch() {
+		branchName := head.Name().Short()
+		headContent := fmt.Sprintf("ref: refs/heads/%s", branchName)
+		headPath := filepath.Join(repoPath, ".mgit", "HEAD")
+		
+		if err := os.WriteFile(headPath, []byte(headContent), 0644); err != nil {
+			return fmt.Errorf("error writing HEAD file: %w", err)
+		}
+		
+		fmt.Printf("Set HEAD to branch: %s\n", branchName)
+	} else {
+		// Detached HEAD - try to find the corresponding MGit hash
+		gitHash := head.Hash().String()
+		
+		// Find the MGit hash for this Git hash
+		var mgitHash string
+		for _, mapping := range mappings {
+			if mapping.GitHash == gitHash {
+				mgitHash = mapping.MGitHash
+				break
+			}
+		}
+		
+		if mgitHash == "" {
+			return fmt.Errorf("could not find MGit hash for detached HEAD at %s", gitHash)
+		}
+		
+		// Write the direct hash as HEAD
+		headPath := filepath.Join(repoPath, ".mgit", "HEAD")
+		if err := os.WriteFile(headPath, []byte(mgitHash), 0644); err != nil {
+			return fmt.Errorf("error writing HEAD file: %w", err)
+		}
+		
+		fmt.Printf("Set HEAD to detached commit: %s\n", mgitHash[:7])
 	}
 	
 	return nil
